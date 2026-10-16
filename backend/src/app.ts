@@ -1,7 +1,8 @@
-﻿import express from 'express';
+import express from 'express';
 import cors from 'cors';
 import { env } from './config/env';
 import healthRouter from './routes/health.route';
+import habitRouter from './routes/habit.route';
 
 const app = express();
 
@@ -11,5 +12,6 @@ app.use(express.json());
 
 // Routes
 app.use('/api/health', healthRouter);
+app.use('/api/habits', habitRouter);
 
 export default app;
