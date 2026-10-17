@@ -28,15 +28,34 @@ export async function createHabit(payload: CreateHabitPayload): Promise<Habit> {
 
 export async function toggleHabitDate(
   habitId: string,
-  date?: string
-): Promise<{ habitId: string; completedDate: string; completed: boolean }> {
+  date: string,
+  today: string,
+  note?: string
+): Promise<{ habitId: string; completedDate: string; completed: boolean; note: string | null }> {
   const response = await fetch(`${API_BASE_URL}/habits/${habitId}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(date ? { date } : {}),
+    body: JSON.stringify({ date, today, note }),
   });
   if (!response.ok) {
-    throw new Error(`Failed to toggle habit (${response.status})`);
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error(errBody.error || `Failed to toggle habit (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function verifyLeetCodeHabit(
+  habitId: string,
+  today: string
+): Promise<{ completed: boolean; solvedTodayCount: number; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/habits/${habitId}/verify-leetcode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ today }),
+  });
+  if (!response.ok) {
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error(errBody.error || `LeetCode verification failed (${response.status})`);
   }
   return response.json();
 }

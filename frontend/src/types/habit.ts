@@ -1,6 +1,8 @@
 export interface DailyProgress {
-  date: string; // YYYY-MM-DD
+  date: string;
   completed: boolean;
+  note: string | null;
+  verifiedCount: number;
 }
 
 export interface Habit {
@@ -8,8 +10,13 @@ export interface Habit {
   title: string;
   category: string;
   targetDaysPerWeek: number;
+  verificationType: 'MANUAL_PROOF' | 'LEETCODE';
+  leetcodeUsername: string | null;
+  dailyTargetCount: number;
   createdAt: string;
   completedToday: boolean;
+  todayNote: string | null;
+  todayVerifiedCount: number;
   currentStreak: number;
   weeklyProgress: DailyProgress[];
 }
@@ -18,4 +25,7 @@ export interface CreateHabitPayload {
   title: string;
   category: string;
   targetDaysPerWeek: number;
+  verificationType: 'MANUAL_PROOF' | 'LEETCODE';
+  leetcodeUsername?: string;
+  dailyTargetCount?: number;
 }

@@ -12,6 +12,9 @@ model Habit {
   title             String
   category          String     @default("General")
   targetDaysPerWeek Int        @default(7)
+  verificationType  String     @default("MANUAL_PROOF") // "MANUAL_PROOF" | "LEETCODE"
+  leetcodeUsername  String?
+  dailyTargetCount  Int        @default(1)
   isArchived        Boolean    @default(false)
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
@@ -23,8 +26,9 @@ model Habit {
 model HabitLog {
   id            String   @id @default(uuid())
   habitId       String
-  completedDate String
-  note          String?
+  completedDate String   // Format: YYYY-MM-DD
+  note          String?  // Proof note or auto-verified LeetCode submission titles
+  verifiedCount Int      @default(1)
   createdAt     DateTime @default(now())
 
   habit         Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
