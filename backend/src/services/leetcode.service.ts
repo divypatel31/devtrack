@@ -1,3 +1,5 @@
+import { env } from '../config/env';
+
 export interface LeetCodeVerificationResult {
   username: string;
   solvedTodayCount: number;
@@ -5,6 +7,7 @@ export interface LeetCodeVerificationResult {
 }
 
 const LEETCODE_GRAPHQL_URL = 'https://leetcode.com/graphql';
+const USERNAME_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
 
 const RECENT_AC_QUERY = `
   query recentAcSubmissions($username: String!, $limit: Int!) {
@@ -23,18 +26,28 @@ const RECENT_AC_QUERY = `
 /**
  * Queries LeetCode GraphQL API for recent Accepted (AC) submissions
  * and counts unique problems solved on targetDateStr (YYYY-MM-DD).
- * Supports a local/test bypass prefix "mock_lc_" for automated Vitest runs.
+ * Deterministic "mock_lc_" prefix is strictly restricted to NODE_ENV === 'test'.
  */
 export async function verifyLeetCodeSubmissionsForDate(
   username: string,
   targetDateStr: string,
-  timezoneOffsetMinutes = 330 // Default IST (+5:30 = 330 mins)
+  timezoneOffsetMinutes = 330
 ): Promise<LeetCodeVerificationResult> {
   const cleanUser = username.trim();
 
-  // Deterministic mock hook for automated integration tests (e.g. "mock_lc_2")
+  if (!USERNAME_REGEX.test(cleanUser)) {
+    throw new Error('Invalid LeetCode username format.');
+  }
+
   if (cleanUser.startsWith('mock_lc_')) {
-    const count = Number(cleanUser.replace('mock_lc_', '')) || 0;
+    if (env.NODE_ENV !== 'test' && !process.env.VITEST) {
+      throw new Error('Mock LeetCode usernames are not permitted outside test environments.');
+    }
+    const suffix = cleanUser.replace('mock_lc_', '');
+    if (suffix === 'error') {
+      throw new Error('Simulated LeetCode upstream error.');
+    }
+    const count = Math.max(0, Number(suffix) || 0);
     const titles = Array.from({ length: count }, (_, i) => `Problem #${i + 1}`);
     return {
       username: cleanUser,

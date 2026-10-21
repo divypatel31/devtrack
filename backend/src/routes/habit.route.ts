@@ -6,8 +6,11 @@ import {
   verifyLeetCode,
   removeHabit,
 } from '../controllers/habit.controller';
+import { requireAuth } from '../middleware/auth.middleware';
 
 const router = Router();
+
+router.use(requireAuth);
 
 router.get('/', listHabits);
 router.post('/', createNewHabit);

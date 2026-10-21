@@ -1,7 +1,13 @@
 import { prisma } from '../config/db';
 import { verifyLeetCodeSubmissionsForDate } from './leetcode.service';
+import {
+  formatDateStr,
+  isValidCalendarDate,
+  isWithinAllowedTodayWindow,
+} from '../utils/date';
 
 export interface CreateHabitInput {
+  userId: string;
   title: string;
   category?: string;
   targetDaysPerWeek?: number;
@@ -18,11 +24,12 @@ export class AppError extends Error {
   }
 }
 
-export function formatDateStr(date: Date): string {
-  return date.toISOString().split('T')[0];
-}
+export { formatDateStr, isValidCalendarDate, isWithinAllowedTodayWindow };
 
 export function getLast7Days(referenceDateStr?: string): string[] {
+  if (referenceDateStr !== undefined && !isValidCalendarDate(referenceDateStr)) {
+    throw new AppError('Invalid calendar date format. Expected valid YYYY-MM-DD.', 400);
+  }
   const baseDate = referenceDateStr
     ? new Date(`${referenceDateStr}T00:00:00.000Z`)
     : new Date();
@@ -40,6 +47,9 @@ export function calculateCurrentStreak(
   completedDates: Set<string>,
   todayStr: string
 ): number {
+  if (!isValidCalendarDate(todayStr)) {
+    throw new AppError('Invalid calendar date format. Expected valid YYYY-MM-DD.', 400);
+  }
   let streak = 0;
   const cursor = new Date(`${todayStr}T00:00:00.000Z`);
 
@@ -58,12 +68,18 @@ export function calculateCurrentStreak(
   return streak;
 }
 
-export async function getAllHabitsWithStats(todayStr?: string) {
+export async function getAllHabitsWithStats(userId: string, todayStr?: string) {
+  if (todayStr !== undefined && !isValidCalendarDate(todayStr)) {
+    throw new AppError('Invalid date format. Expected valid YYYY-MM-DD.', 400);
+  }
   const currentDay = todayStr || formatDateStr(new Date());
   const last7Days = getLast7Days(currentDay);
 
   const habits = await prisma.habit.findMany({
-    where: { isArchived: false },
+    where: {
+      userId,
+      isArchived: false,
+    },
     include: {
       logs: {
         orderBy: { completedDate: 'desc' },
@@ -105,40 +121,71 @@ export async function getAllHabitsWithStats(todayStr?: string) {
 }
 
 export async function createHabit(input: CreateHabitInput) {
+  if (!input.userId) {
+    throw new AppError('Authentication required.', 401);
+  }
+
+  const cleanTitle = typeof input.title === 'string' ? input.title.trim() : '';
+  if (!cleanTitle || cleanTitle.length > 120) {
+    throw new AppError('Habit title is required and must be 120 characters or fewer.', 400);
+  }
+
+  const cleanCategory =
+    typeof input.category === 'string' && input.category.trim().length > 0
+      ? input.category.trim()
+      : 'General';
+  if (cleanCategory.length > 40) {
+    throw new AppError('Category must be 40 characters or fewer.', 400);
+  }
+
   const verificationType =
     input.verificationType === 'LEETCODE' ? 'LEETCODE' : 'MANUAL_PROOF';
 
-  if (verificationType === 'LEETCODE' && !input.leetcodeUsername?.trim()) {
-    throw new AppError('LeetCode username is required for LeetCode auto-verified goals.', 400);
+  const cleanLcUser =
+    typeof input.leetcodeUsername === 'string' ? input.leetcodeUsername.trim() : '';
+
+  if (verificationType === 'LEETCODE') {
+    if (!cleanLcUser) {
+      throw new AppError('LeetCode username is required for LeetCode auto-verified goals.', 400);
+    }
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(cleanLcUser)) {
+      throw new AppError('Invalid LeetCode username format.', 400);
+    }
   }
 
   return prisma.habit.create({
     data: {
-      title: input.title.trim(),
-      category: input.category?.trim() || 'General',
+      userId: input.userId,
+      title: cleanTitle,
+      category: cleanCategory,
       targetDaysPerWeek: input.targetDaysPerWeek ?? 7,
       verificationType,
-      leetcodeUsername:
-        verificationType === 'LEETCODE' ? input.leetcodeUsername?.trim() : null,
+      leetcodeUsername: verificationType === 'LEETCODE' ? cleanLcUser : null,
       dailyTargetCount: input.dailyTargetCount ?? 1,
     },
   });
 }
 
 /**
- * Toggles completion for MANUAL_PROOF habits on TODAY only.
- * Blocks backdating past days and blocks manual toggling of LEETCODE habits.
+ * Toggles completion for MANUAL_PROOF habits on TODAY only, enforcing userId ownership
+ * and server-bounded timezone clock verification.
  */
 export async function toggleHabitCompletion(
+  userId: string,
   habitId: string,
   dateStr?: string,
   todayStr?: string,
   proofNote?: string
 ) {
-  const currentToday = todayStr || formatDateStr(new Date());
+  const serverUtcToday = formatDateStr(new Date());
+  const currentToday = todayStr || serverUtcToday;
   const targetDate = dateStr || currentToday;
 
-  // Rule 1: Anti-cheat lock — prevent faking past or future days
+  if (!isValidCalendarDate(currentToday) || !isValidCalendarDate(targetDate)) {
+    throw new AppError('Invalid calendar date format. Expected valid YYYY-MM-DD.', 400);
+  }
+
+  // Rule 1a: Client date must match today's date
   if (targetDate !== currentToday) {
     throw new AppError(
       'Anti-cheat lock: You can only log goals for today. Past days are locked and cannot be backdated.',
@@ -146,7 +193,18 @@ export async function toggleHabitCompletion(
     );
   }
 
-  const habit = await prisma.habit.findUnique({ where: { id: habitId } });
+  // Rule 1b: Prevent client from spoofing `today` to an arbitrary past/future date outside real-world timezones
+  if (!isWithinAllowedTodayWindow(targetDate)) {
+    throw new AppError(
+      'Anti-cheat lock: Target date is outside the current server day window.',
+      403
+    );
+  }
+
+  // Enforce ownership in the database query
+  const habit = await prisma.habit.findFirst({
+    where: { id: habitId, userId },
+  });
   if (!habit) {
     throw new AppError('Habit not found.', 404);
   }
@@ -162,7 +220,7 @@ export async function toggleHabitCompletion(
   const existingLog = await prisma.habitLog.findUnique({
     where: {
       habitId_completedDate: {
-        habitId,
+        habitId: habit.id,
         completedDate: targetDate,
       },
     },
@@ -172,20 +230,20 @@ export async function toggleHabitCompletion(
     await prisma.habitLog.delete({
       where: { id: existingLog.id },
     });
-    return { habitId, completedDate: targetDate, completed: false, note: null };
+    return { habitId: habit.id, completedDate: targetDate, completed: false, note: null };
   }
 
-  const cleanProof = proofNote?.trim() || '';
-  if (cleanProof.length < 4) {
+  const cleanProof = typeof proofNote === 'string' ? proofNote.trim() : '';
+  if (cleanProof.length < 4 || cleanProof.length > 500) {
     throw new AppError(
-      'Proof required: Please enter a brief work summary or commit/PR link (min 4 chars) to verify today\'s goal.',
+      'Proof required: Please enter a brief work summary or commit/PR link (4 to 500 chars) to verify today\'s goal.',
       400
     );
   }
 
   const created = await prisma.habitLog.create({
     data: {
-      habitId,
+      habitId: habit.id,
       completedDate: targetDate,
       note: cleanProof,
       verifiedCount: habit.dailyTargetCount,
@@ -193,7 +251,7 @@ export async function toggleHabitCompletion(
   });
 
   return {
-    habitId,
+    habitId: habit.id,
     completedDate: targetDate,
     completed: true,
     note: created.note,
@@ -201,11 +259,30 @@ export async function toggleHabitCompletion(
 }
 
 /**
- * Verifies a LEETCODE habit against LeetCode's GraphQL API for today.
+ * Verifies a LEETCODE habit against LeetCode's GraphQL API for today, enforcing ownership.
  */
-export async function verifyLeetCodeHabit(habitId: string, todayStr?: string) {
-  const currentToday = todayStr || formatDateStr(new Date());
-  const habit = await prisma.habit.findUnique({ where: { id: habitId } });
+export async function verifyLeetCodeHabit(
+  userId: string,
+  habitId: string,
+  todayStr?: string
+) {
+  const serverUtcToday = formatDateStr(new Date());
+  const currentToday = todayStr || serverUtcToday;
+
+  if (!isValidCalendarDate(currentToday)) {
+    throw new AppError('Invalid today format. Expected valid YYYY-MM-DD.', 400);
+  }
+
+  if (!isWithinAllowedTodayWindow(currentToday)) {
+    throw new AppError(
+      'Anti-cheat lock: Verification date is outside the current server day window.',
+      403
+    );
+  }
+
+  const habit = await prisma.habit.findFirst({
+    where: { id: habitId, userId },
+  });
 
   if (!habit) {
     throw new AppError('Habit not found.', 404);
@@ -214,10 +291,16 @@ export async function verifyLeetCodeHabit(habitId: string, todayStr?: string) {
     throw new AppError('This habit is not configured for LeetCode verification.', 400);
   }
 
-  const result = await verifyLeetCodeSubmissionsForDate(
-    habit.leetcodeUsername,
-    currentToday
-  );
+  let result;
+  try {
+    result = await verifyLeetCodeSubmissionsForDate(
+      habit.leetcodeUsername,
+      currentToday
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unable to verify LeetCode submissions.';
+    throw new AppError(message, 400);
+  }
 
   const metTarget = result.solvedTodayCount >= habit.dailyTargetCount;
 
@@ -258,8 +341,14 @@ export async function verifyLeetCodeHabit(habitId: string, todayStr?: string) {
   };
 }
 
-export async function deleteHabit(habitId: string) {
-  return prisma.habit.delete({
-    where: { id: habitId },
+export async function deleteHabit(userId: string, habitId: string) {
+  const deleted = await prisma.habit.deleteMany({
+    where: { id: habitId, userId },
   });
+
+  if (deleted.count === 0) {
+    throw new AppError('Habit not found.', 404);
+  }
+
+  return { deleted: true, id: habitId };
 }
