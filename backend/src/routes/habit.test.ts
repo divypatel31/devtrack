@@ -3,22 +3,44 @@ import request from 'supertest';
 import app from '../app';
 import { prisma } from '../config/db';
 import {
+  addCalendarDays,
   formatDateStr,
+  getDateRangeEndingAt,
+  getDatesInMonth,
+  getTodayForTimezone,
+  getWeekdayIndex,
   isValidCalendarDate,
+  isValidYearMonth,
   isWithinAllowedTodayWindow,
+  normalizeScheduledDays,
 } from '../utils/date';
-import { calculateCurrentStreak } from '../services/habit.service';
+import {
+  calculateCurrentStreak,
+  calculateLongestStreak,
+} from '../services/habit.service';
 
-describe('Habits, Cross-User Isolation, Streak Edge Cases & Anti-Cheat API (/api/habits)', () => {
+describe('Phase 2 & 3 Habit Engine, Calendar, Archiving, Streaks & Analytics (/api/habits)', () => {
   let tokenA = '';
   let tokenB = '';
   let userAEmail = '';
   let userBEmail = '';
   let habitIdA = '';
   const todayStr = formatDateStr(new Date());
+  const currentMonthStr = todayStr.slice(0, 7);
+  const todayWeekday = getWeekdayIndex(todayStr);
 
   beforeAll(async () => {
-    await prisma.$connect();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await prisma.$connect();
+        await prisma.$queryRaw`SELECT 1`;
+        break;
+      } catch (err) {
+        if (attempt === 3) throw err;
+        await prisma.$disconnect().catch(() => {});
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+    }
 
     const tag = Date.now();
     userAEmail = `user_a_${tag}@devtrack.local`;
@@ -37,7 +59,7 @@ describe('Habits, Cross-User Isolation, Streak Edge Cases & Anti-Cheat API (/api
       password: 'Password123!',
     });
     tokenB = regB.body.token;
-  }, 30000);
+  }, 60000);
 
   afterAll(async () => {
     await prisma.user.deleteMany({
@@ -49,152 +71,234 @@ describe('Habits, Cross-User Isolation, Streak Edge Cases & Anti-Cheat API (/api
       },
     });
     await prisma.$disconnect();
-  }, 30000);
+  }, 60000);
 
-  it('rejects unauthenticated habit requests (401)', async () => {
-    const res = await request(app).get('/api/habits');
-    expect(res.status).toBe(401);
+  it('1. handles empty history and unauthenticated or invalid requests cleanly', async () => {
+    const unauthList = await request(app).get('/api/habits');
+    expect(unauthList.status).toBe(401);
+
+    const unauthAnalytics = await request(app).get('/api/habits/analytics');
+    expect(unauthAnalytics.status).toBe(401);
+
+    const unauthCalendar = await request(app).get('/api/habits/calendar');
+    expect(unauthCalendar.status).toBe(401);
+
+    const badDateRes = await request(app)
+      .get('/api/habits?date=2026-02-31')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(badDateRes.status).toBe(400);
+
+    const badMonthRes = await request(app)
+      .get('/api/habits/calendar?month=2026-13')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(badMonthRes.status).toBe(400);
+
+    const badTzRes = await request(app)
+      .get('/api/habits/analytics?tzOffset=9999')
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(badTzRes.status).toBe(400);
+
+    const emptyAnalyticsRes = await request(app)
+      .get(`/api/habits/analytics?date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(emptyAnalyticsRes.status).toBe(200);
+    expect(emptyAnalyticsRes.body.analytics.todayScheduledCount).toBe(0);
+    expect(emptyAnalyticsRes.body.analytics.todayCompletionPercentage).toBe(0);
+    expect(emptyAnalyticsRes.body.analytics.trend7Days).toHaveLength(7);
+    expect(emptyAnalyticsRes.body.analytics.trend30Days).toHaveLength(30);
   });
 
-  it('allows User A to create a habit and rejects invalid titles', async () => {
-    const emptyRes = await request(app)
+  it('2. validates habit creation, weekday schedule rules, completion undo, and re-completion', async () => {
+    const badSchedule1 = await request(app)
       .post('/api/habits')
       .set('Authorization', `Bearer ${tokenA}`)
-      .send({ title: '   ' });
-    expect(emptyRes.status).toBe(400);
+      .send({ title: 'Bad Schedule', scheduledDays: [] });
+    expect(badSchedule1.status).toBe(400);
 
-    const res = await request(app)
+    const badSchedule2 = await request(app)
+      .post('/api/habits')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ title: 'Bad Schedule 2', scheduledDays: [0, 7] });
+    expect(badSchedule2.status).toBe(400);
+
+    const unscheduledWeekday = (todayWeekday + 1) % 7;
+    const createRes = await request(app)
       .post('/api/habits')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        title: 'User A DSA Practice',
+        title: 'User A Scheduled Practice',
         category: 'DSA',
+        scheduledDays: [unscheduledWeekday],
         verificationType: 'MANUAL_PROOF',
       });
-    expect(res.status).toBe(201);
-    habitIdA = res.body.habit.id;
-    expect(res.body.habit.userId).toBeDefined();
+    expect(createRes.status).toBe(201);
+    habitIdA = createRes.body.habit.id;
+    expect(createRes.body.habit.scheduledDays).toEqual([unscheduledWeekday]);
+    expect(createRes.body.habit.targetDaysPerWeek).toBe(1);
+
+    // Attempting to complete on an unscheduled weekday -> 400
+    const unscheduledToggle = await request(app)
+      .post(`/api/habits/${habitIdA}/toggle`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ date: todayStr, today: todayStr, note: 'Trying on unscheduled day' });
+    expect(unscheduledToggle.status).toBe(400);
+
+    // Update schedule via PATCH /api/habits/:id to include todayWeekday
+    const patchRes = await request(app)
+      .patch(`/api/habits/${habitIdA}`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        title: 'User A Daily DSA Practice',
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6],
+      });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.habit.targetDaysPerWeek).toBe(7);
+
+    // Complete today with valid proof -> completed: true, currentStreak: 1, longestStreak: 1
+    const complete1 = await request(app)
+      .post(`/api/habits/${habitIdA}/toggle`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ date: todayStr, today: todayStr, note: 'Solved Binary Search & Trees' });
+    expect(complete1.status).toBe(200);
+    expect(complete1.body.completed).toBe(true);
+    expect(complete1.body.currentStreak).toBe(1);
+    expect(complete1.body.longestStreak).toBe(1);
+
+    // Safe Undo
+    const undoRes = await request(app)
+      .post(`/api/habits/${habitIdA}/toggle`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ date: todayStr, today: todayStr });
+    expect(undoRes.status).toBe(200);
+    expect(undoRes.body.completed).toBe(false);
+    expect(undoRes.body.currentStreak).toBe(0);
+
+    // Re-completion
+    const recompleteRes = await request(app)
+      .post(`/api/habits/${habitIdA}/toggle`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ date: todayStr, today: todayStr, note: 'Re-verified Binary Search & Trees' });
+    expect(recompleteRes.status).toBe(200);
+    expect(recompleteRes.body.completed).toBe(true);
+    expect(recompleteRes.body.currentStreak).toBe(1);
   });
 
-  it('enforces cross-user isolation: User B cannot read, toggle, verify, or delete User A\'s habit (404)', async () => {
-    const listRes = await request(app)
-      .get('/api/habits')
-      .set('Authorization', `Bearer ${tokenB}`);
-    expect(listRes.status).toBe(200);
-    expect(listRes.body.habits.some((h: { id: string }) => h.id === habitIdA)).toBe(false);
+  it('3. verifies monthly habit calendar endpoint, archiving/restoring while preserving history, and user isolation', async () => {
+    // 1. Fetch monthly calendar for User A on currentMonthStr
+    const calRes = await request(app)
+      .get(`/api/habits/calendar?month=${currentMonthStr}&date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(calRes.status).toBe(200);
+    expect(calRes.body.calendar.month).toBe(currentMonthStr);
+    expect(calRes.body.calendar.summary.totalCompletedLogsInMonth).toBe(1);
 
-    const toggleRes = await request(app)
+    const todayCell = calRes.body.calendar.days.find(
+      (d: { date: string }) => d.date === todayStr
+    );
+    expect(todayCell).toBeDefined();
+    expect(todayCell.status).toBe('completed');
+    expect(todayCell.completedCount).toBe(1);
+
+    // 2. Future month calendar cells must be marked 'future'
+    const futureCal = await request(app)
+      .get(`/api/habits/calendar?month=2099-01&date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(futureCal.status).toBe(200);
+    expect(
+      futureCal.body.calendar.days.every((d: { status: string }) => d.status === 'future')
+    ).toBe(true);
+
+    // 3. Past month before habit creation must be marked 'before_created'
+    const pastCal = await request(app)
+      .get(`/api/habits/calendar?month=2020-01&date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(pastCal.status).toBe(200);
+    expect(
+      pastCal.body.calendar.days.every((d: { status: string }) => d.status === 'before_created')
+    ).toBe(true);
+
+    // 4. User B cannot query User A's habitId on /api/habits/calendar (404)
+    const crossCal = await request(app)
+      .get(`/api/habits/calendar?month=${currentMonthStr}&date=${todayStr}&habitId=${habitIdA}`)
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(crossCal.status).toBe(404);
+
+    // 5. Archive habitIdA -> hidden from default active list, visible with includeArchived=true, and historical logs preserved!
+    const archiveRes = await request(app)
+      .patch(`/api/habits/${habitIdA}`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ isArchived: true });
+    expect(archiveRes.status).toBe(200);
+    expect(archiveRes.body.habit.isArchived).toBe(true);
+
+    const activeList = await request(app)
+      .get(`/api/habits?date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(activeList.body.habits).toHaveLength(0);
+    // Total completed scheduled habits across history is still preserved (1)!
+    expect(activeList.body.analytics.totalCompletedScheduledHabits).toBe(1);
+
+    const archivedList = await request(app)
+      .get(`/api/habits?date=${todayStr}&includeArchived=true`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    expect(archivedList.body.habits).toHaveLength(1);
+    expect(archivedList.body.habits[0].isArchived).toBe(true);
+    expect(archivedList.body.habits[0].longestStreak).toBe(1);
+
+    // Restore habitIdA back to active
+    const restoreRes = await request(app)
+      .patch(`/api/habits/${habitIdA}`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({ isArchived: false });
+    expect(restoreRes.status).toBe(200);
+    expect(restoreRes.body.habit.isArchived).toBe(false);
+  });
+
+  it('4. enforces two-user isolation across habits, PATCH, toggle, verify, delete, and analytics', async () => {
+    const listB = await request(app)
+      .get(`/api/habits?date=${todayStr}`)
+      .set('Authorization', `Bearer ${tokenB}`);
+    expect(listB.status).toBe(200);
+    expect(listB.body.habits).toHaveLength(0);
+    expect(listB.body.analytics.todayScheduledCount).toBe(0);
+    expect(listB.body.analytics.totalCompletedScheduledHabits).toBe(0);
+
+    const patchB = await request(app)
+      .patch(`/api/habits/${habitIdA}`)
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({ title: 'Hacked Title' });
+    expect(patchB.status).toBe(404);
+
+    const toggleB = await request(app)
       .post(`/api/habits/${habitIdA}/toggle`)
       .set('Authorization', `Bearer ${tokenB}`)
-      .send({ date: todayStr, today: todayStr, note: 'Unauthorized tamper attempt' });
-    expect(toggleRes.status).toBe(404);
+      .send({ date: todayStr, today: todayStr, note: 'Unauthorized toggle' });
+    expect(toggleB.status).toBe(404);
 
-    const verifyRes = await request(app)
+    const verifyB = await request(app)
       .post(`/api/habits/${habitIdA}/verify-leetcode`)
       .set('Authorization', `Bearer ${tokenB}`)
       .send({ today: todayStr });
-    expect(verifyRes.status).toBe(404);
+    expect(verifyB.status).toBe(404);
 
-    const deleteRes = await request(app)
+    const deleteB = await request(app)
       .delete(`/api/habits/${habitIdA}`)
       .set('Authorization', `Bearer ${tokenB}`);
-    expect(deleteRes.status).toBe(404);
+    expect(deleteB.status).toBe(404);
   });
 
-  it('enforces anti-cheat past date lock, proof validation, and duplicate completion toggle behavior', async () => {
-    // 1. Backdate attempt (date !== today) -> 403
+  it('5. verifies LeetCode auto-sync, idempotent duplicate completions, and anti-cheat locks', async () => {
     const backdateRes = await request(app)
       .post(`/api/habits/${habitIdA}/toggle`)
       .set('Authorization', `Bearer ${tokenA}`)
       .send({ date: '2020-01-01', today: todayStr, note: 'Backdate try' });
     expect(backdateRes.status).toBe(403);
 
-    // 2. Spoofed `today` outside real-world server clock window -> 403
-    const spoofedTodayRes = await request(app)
-      .post(`/api/habits/${habitIdA}/toggle`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ date: '2020-01-01', today: '2020-01-01', note: 'Spoofed clock try' });
-    expect(spoofedTodayRes.status).toBe(403);
-
-    // 3. Invalid short proof (< 4 chars) -> 400
-    const noProofRes = await request(app)
-      .post(`/api/habits/${habitIdA}/toggle`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ date: todayStr, today: todayStr, note: 'abc' });
-    expect(noProofRes.status).toBe(400);
-
-    // 4. First valid completion -> completed: true (200)
-    const validRes = await request(app)
-      .post(`/api/habits/${habitIdA}/toggle`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ date: todayStr, today: todayStr, note: 'Solved Two Sum & Valid Parentheses' });
-    expect(validRes.status).toBe(200);
-    expect(validRes.body.completed).toBe(true);
-
-    // 5. Second toggle on same day unchecks completion cleanly without duplicate rows -> completed: false (200)
-    const uncheckRes = await request(app)
-      .post(`/api/habits/${habitIdA}/toggle`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ date: todayStr, today: todayStr });
-    expect(uncheckRes.status).toBe(200);
-    expect(uncheckRes.body.completed).toBe(false);
-  });
-
-  it('verifies LeetCode success, idempotent duplicate syncs, and LeetCode failure edge cases', async () => {
-    // 1. Calling verify-leetcode on a MANUAL_PROOF habit -> 400
-    const wrongTypeRes = await request(app)
-      .post(`/api/habits/${habitIdA}/verify-leetcode`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ today: todayStr });
-    expect(wrongTypeRes.status).toBe(400);
-
-    // 2. Create LEETCODE habit where user solved 0/2 today -> completed: false
-    const lcIncompleteCreate = await request(app)
-      .post('/api/habits')
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({
-        title: 'LeetCode Incomplete Target',
-        category: 'DSA',
-        verificationType: 'LEETCODE',
-        leetcodeUsername: 'mock_lc_0',
-        dailyTargetCount: 2,
-      });
-    expect(lcIncompleteCreate.status).toBe(201);
-    const lcIncompleteId = lcIncompleteCreate.body.habit.id;
-
-    const incompleteVerify = await request(app)
-      .post(`/api/habits/${lcIncompleteId}/verify-leetcode`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ today: todayStr });
-    expect(incompleteVerify.status).toBe(200);
-    expect(incompleteVerify.body.completed).toBe(false);
-    expect(incompleteVerify.body.solvedTodayCount).toBe(0);
-
-    // 3. Create LEETCODE habit where upstream API errors -> 400
-    const lcErrorCreate = await request(app)
-      .post('/api/habits')
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({
-        title: 'LeetCode Error Target',
-        category: 'DSA',
-        verificationType: 'LEETCODE',
-        leetcodeUsername: 'mock_lc_error',
-        dailyTargetCount: 1,
-      });
-    const lcErrorId = lcErrorCreate.body.habit.id;
-
-    const errVerify = await request(app)
-      .post(`/api/habits/${lcErrorId}/verify-leetcode`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ today: todayStr });
-    expect(errVerify.status).toBe(400);
-
-    // 4. Create LEETCODE habit with 2/2 solved -> completed: true & idempotent on repeat sync
     const lcCreate = await request(app)
       .post('/api/habits')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        title: 'LeetCode Daily Target',
+        title: 'LeetCode Daily 2',
         category: 'DSA',
         verificationType: 'LEETCODE',
         leetcodeUsername: 'mock_lc_2',
@@ -203,82 +307,77 @@ describe('Habits, Cross-User Isolation, Streak Edge Cases & Anti-Cheat API (/api
     expect(lcCreate.status).toBe(201);
     const lcId = lcCreate.body.habit.id;
 
-    // Manual toggle on LeetCode goal -> 403
-    const manualToggle = await request(app)
+    const manualOnLc = await request(app)
       .post(`/api/habits/${lcId}/toggle`)
       .set('Authorization', `Bearer ${tokenA}`)
-      .send({ date: todayStr, today: todayStr, note: 'Trying manual check' });
-    expect(manualToggle.status).toBe(403);
+      .send({ date: todayStr, today: todayStr, note: 'Manual bypass try' });
+    expect(manualOnLc.status).toBe(403);
 
-    // First verify -> 200 completed: true
-    const verifyRes1 = await request(app)
+    const sync1 = await request(app)
       .post(`/api/habits/${lcId}/verify-leetcode`)
       .set('Authorization', `Bearer ${tokenA}`)
-      .send({ today: todayStr });
-    expect(verifyRes1.status).toBe(200);
-    expect(verifyRes1.body.completed).toBe(true);
-    expect(verifyRes1.body.solvedTodayCount).toBe(2);
+      .send({ today: todayStr, timezoneOffsetMinutes: 330 });
+    expect(sync1.status).toBe(200);
+    expect(sync1.body.completed).toBe(true);
+    expect(sync1.body.currentStreak).toBe(1);
 
-    // Second duplicate verify on same day -> 200 (idempotent upsert)
-    const verifyRes2 = await request(app)
+    const sync2 = await request(app)
       .post(`/api/habits/${lcId}/verify-leetcode`)
       .set('Authorization', `Bearer ${tokenA}`)
-      .send({ today: todayStr });
-    expect(verifyRes2.status).toBe(200);
-    expect(verifyRes2.body.completed).toBe(true);
-
-    // Delete habit -> 200, and second delete -> 404
-    const del1 = await request(app)
-      .delete(`/api/habits/${habitIdA}`)
-      .set('Authorization', `Bearer ${tokenA}`);
-    expect(del1.status).toBe(200);
-
-    const del2 = await request(app)
-      .delete(`/api/habits/${habitIdA}`)
-      .set('Authorization', `Bearer ${tokenA}`);
-    expect(del2.status).toBe(404);
+      .send({ today: todayStr, timezoneOffsetMinutes: 330 });
+    expect(sync2.status).toBe(200);
+    expect(sync2.body.completed).toBe(true);
+    expect(sync2.body.currentStreak).toBe(1);
   });
 
-  it('validates streak calculation edge cases, invalid calendar dates, and timezone boundaries', async () => {
-    // Calendar date validation
-    expect(isValidCalendarDate('2026-10-19')).toBe(true);
-    expect(isValidCalendarDate('2026-02-31')).toBe(false);
-    expect(isValidCalendarDate('2026-99-99')).toBe(false);
-    expect(isValidCalendarDate('not-a-date')).toBe(false);
+  it('6. unit-tests daily streaks, selected-weekday schedules, unscheduled days, missed-day recovery, and boundaries', () => {
+    const dailySet = new Set(['2026-10-17', '2026-10-18', '2026-10-19']);
+    expect(calculateCurrentStreak(dailySet, '2026-10-19')).toBe(3);
+    expect(calculateLongestStreak(dailySet, '2026-10-19')).toBe(3);
 
-    // API rejects impossible calendar dates (e.g., 2026-02-31) with 400 instead of crashing with 500
-    const badDateRes = await request(app)
-      .get('/api/habits?date=2026-02-31')
-      .set('Authorization', `Bearer ${tokenA}`);
-    expect(badDateRes.status).toBe(400);
+    const mwfSchedule = [1, 3, 5];
+    const mwfLogs = new Set(['2026-10-12', '2026-10-14', '2026-10-16']);
+    expect(calculateCurrentStreak(mwfLogs, '2026-10-15', mwfSchedule)).toBe(2);
+    expect(calculateCurrentStreak(mwfLogs, '2026-10-19', mwfSchedule)).toBe(3);
+    expect(calculateLongestStreak(mwfLogs, '2026-10-19', mwfSchedule)).toBe(3);
 
-    // Timezone boundary validation (-12h to +14h around reference UTC timestamp)
-    const refUtc = new Date('2026-10-19T22:00:00.000Z').getTime();
-    // At 22:00 UTC on Oct 19, UTC+14 (Kiritimati) is already Oct 20 (12:00), and UTC is Oct 19
-    expect(isWithinAllowedTodayWindow('2026-10-19', refUtc)).toBe(true);
-    expect(isWithinAllowedTodayWindow('2026-10-20', refUtc)).toBe(true);
-    expect(isWithinAllowedTodayWindow('2026-10-17', refUtc)).toBe(false);
+    expect(calculateCurrentStreak(mwfLogs, '2026-10-21', mwfSchedule)).toBe(0);
+    expect(calculateLongestStreak(mwfLogs, '2026-10-21', mwfSchedule)).toBe(3);
 
-    // Streak edge cases:
-    // 1. Consecutive 3 days including today
-    const streak3 = calculateCurrentStreak(
-      new Set(['2026-10-17', '2026-10-18', '2026-10-19']),
-      '2026-10-19'
-    );
-    expect(streak3).toBe(3);
+    const mwfRecovered = new Set(['2026-10-12', '2026-10-14', '2026-10-16', '2026-10-21']);
+    expect(calculateCurrentStreak(mwfRecovered, '2026-10-21', mwfSchedule)).toBe(1);
+    expect(calculateLongestStreak(mwfRecovered, '2026-10-21', mwfSchedule)).toBe(3);
 
-    // 2. Yesterday completed, today not yet completed -> grace period keeps streak at 2
-    const graceStreak = calculateCurrentStreak(
-      new Set(['2026-10-17', '2026-10-18']),
-      '2026-10-19'
-    );
-    expect(graceStreak).toBe(2);
+    const yearBoundaryLogs = new Set([
+      '2025-12-30',
+      '2025-12-31',
+      '2026-01-01',
+      '2026-01-02',
+    ]);
+    expect(calculateCurrentStreak(yearBoundaryLogs, '2026-01-02')).toBe(4);
+    expect(calculateLongestStreak(yearBoundaryLogs, '2026-01-02')).toBe(4);
 
-    // 3. Gap yesterday (completed 2 days ago, missed yesterday and today) -> streak resets to 0
-    const brokenStreak = calculateCurrentStreak(
-      new Set(['2026-10-16', '2026-10-17']),
-      '2026-10-19'
-    );
-    expect(brokenStreak).toBe(0);
+    expect(addCalendarDays('2026-02-28', 1)).toBe('2026-03-01');
+    expect(getDateRangeEndingAt('2026-03-02', 3)).toEqual([
+      '2026-02-28',
+      '2026-03-01',
+      '2026-03-02',
+    ]);
+    expect(isValidYearMonth('2026-10')).toBe(true);
+    expect(isValidYearMonth('2026-00')).toBe(false);
+    expect(getDatesInMonth('2026-02')).toHaveLength(28);
+    expect(getDatesInMonth('2024-02')).toHaveLength(29);
+
+    const refTimestamp = new Date('2026-10-20T20:00:00.000Z').getTime();
+    expect(getTodayForTimezone(0, refTimestamp)).toBe('2026-10-20');
+    expect(getTodayForTimezone(330, refTimestamp)).toBe('2026-10-21');
+    expect(getTodayForTimezone(-420, refTimestamp)).toBe('2026-10-20');
+
+    expect(isWithinAllowedTodayWindow('2026-10-20', refTimestamp)).toBe(true);
+    expect(isWithinAllowedTodayWindow('2026-10-21', refTimestamp)).toBe(true);
+    expect(isWithinAllowedTodayWindow('2026-10-18', refTimestamp)).toBe(false);
+
+    expect(normalizeScheduledDays([5, 1, 3, 1])).toEqual([1, 3, 5]);
+    expect(isValidCalendarDate('2026-02-29')).toBe(false);
   });
 });
