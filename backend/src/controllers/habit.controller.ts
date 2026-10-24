@@ -117,6 +117,11 @@ export async function getCalendar(req: Request, res: Response): Promise<void> {
       }
     }
 
+    const domainQuery =
+      typeof req.query.domain === 'string' && req.query.domain.trim().length > 0
+        ? req.query.domain.trim()
+        : undefined;
+
     const habitId =
       typeof req.query.habitId === 'string' && req.query.habitId.trim().length > 0
         ? req.query.habitId.trim()
@@ -127,7 +132,8 @@ export async function getCalendar(req: Request, res: Response): Promise<void> {
       monthQuery,
       todayQuery,
       tzOffset,
-      habitId
+      habitId,
+      domainQuery
     );
     res.status(200).json({ calendar });
   } catch (error) {
@@ -148,6 +154,7 @@ export async function createNewHabit(req: Request, res: Response): Promise<void>
     }
 
     const {
+      domain,
       title,
       category,
       targetDaysPerWeek,
@@ -178,6 +185,7 @@ export async function createNewHabit(req: Request, res: Response): Promise<void>
 
     const habit = await habitService.createHabit({
       userId: req.user.id,
+      domain: typeof domain === 'string' ? domain : 'DEVELOPER',
       title,
       category: typeof category === 'string' ? category : 'General',
       targetDaysPerWeek: parsedTarget,
@@ -207,6 +215,7 @@ export async function patchHabit(req: Request, res: Response): Promise<void> {
 
     const habitId = String(req.params.id);
     const {
+      domain,
       title,
       category,
       scheduledDays,
@@ -216,6 +225,7 @@ export async function patchHabit(req: Request, res: Response): Promise<void> {
     } = req.body ?? {};
 
     const updated = await habitService.updateHabit(req.user.id, habitId, {
+      domain,
       title,
       category,
       scheduledDays,

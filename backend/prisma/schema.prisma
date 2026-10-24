@@ -8,18 +8,22 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  name         String
-  passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  habits       Habit[]
+  id                  String               @id @default(uuid())
+  email               String               @unique
+  name                String
+  passwordHash        String
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  habits              Habit[]
+  goals               PerformanceGoal[]
+  activities          ActivityRecord[]
+  providerConnections ProviderConnection[]
 }
 
 model Habit {
   id                String     @id @default(uuid())
   userId            String
+  domain            String     @default("DEVELOPER") // "DEVELOPER" | "ATHLETE" | "LEARNING"
   title             String
   category          String     @default("General")
   targetDaysPerWeek Int        @default(7)
@@ -34,6 +38,7 @@ model Habit {
   logs              HabitLog[]
 
   @@index([userId, isArchived])
+  @@index([userId, domain, isArchived])
   @@index([isArchived])
 }
 
@@ -49,4 +54,90 @@ model HabitLog {
 
   @@unique([habitId, completedDate])
   @@index([completedDate])
+}
+
+model PerformanceGoal {
+  id           String           @id @default(uuid())
+  userId       String
+  domain       String           // "DEVELOPER" | "ATHLETE" | "LEARNING"
+  title        String
+  metricType   String           // "DISTANCE_KM" | "DURATION_MIN" | "SESSIONS" | "PROBLEMS" | "PAGES" | "COMMITS"
+  targetValue  Float
+  currentValue Float            @default(0)
+  unit         String
+  startDate    String           // YYYY-MM-DD
+  targetDate   String?          // YYYY-MM-DD
+  status       String           @default("ACTIVE") // "ACTIVE" | "COMPLETED" | "ARCHIVED"
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities   ActivityRecord[]
+
+  @@index([userId, domain, status])
+}
+
+model ActivityRecord {
+  id                    String           @id @default(uuid())
+  userId                String
+  goalId                String?
+  domain                String           // "DEVELOPER" | "ATHLETE" | "LEARNING"
+  activityType          String           // "RUN" | "RIDE" | "WORKOUT" | "DEEP_WORK" | "LEETCODE_AC" | "GITHUB_PUSH" | "STUDY_SESSION" | "READING" | "COURSE_MODULE"
+  title                 String
+  occurredAt            DateTime         @default(now())
+  localDate             String           // YYYY-MM-DD in user's timezone
+  timezoneOffsetMinutes Int              @default(0)
+
+  // Server-controlled Trust & Evidence Engine
+  evidenceClass         String           @default("SELF_REPORTED") // "PROVIDER_VERIFIED" | "EVIDENCE_SUBMITTED" | "SELF_REPORTED"
+  provider              String           @default("NONE")          // "NONE" | "STRAVA" | "GITHUB" | "LEETCODE"
+  externalId            String?
+  externalUrl           String?
+  syncStatus            String           @default("MANUAL")        // "SYNCED" | "STALE" | "REVOKED" | "MANUAL"
+  evidenceUrl           String?
+  evidenceNote          String?
+
+  // Domain-Specific Metrics (Nullable - never fabricated)
+  durationMinutes       Int?
+  distanceMeters        Float?
+  movingTimeSeconds     Int?
+  elapsedTimeSeconds    Int?
+  elevationGainMeters   Float?
+  avgHeartRate          Float?
+  maxHeartRate          Float?
+  quantity              Float?
+  unit                  String?
+  metadataJson          String?
+
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  goal                  PerformanceGoal? @relation(fields: [goalId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, provider, externalId])
+  @@index([userId, localDate])
+  @@index([userId, domain, localDate])
+  @@index([userId, evidenceClass])
+}
+
+model ProviderConnection {
+  id                    String    @id @default(uuid())
+  userId                String
+  provider              String    // "STRAVA" | "GITHUB"
+  externalAccountId     String?
+  displayName           String?
+  scopes                String?
+  encryptedAccessToken  String?
+  encryptedRefreshToken String?
+  tokenExpiresAt        DateTime?
+  status                String    @default("DISCONNECTED") // "CONNECTED" | "DISCONNECTED" | "REVOKED" | "ERROR"
+  lastSyncedAt          DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId, status])
 }

@@ -17,6 +17,7 @@ import {
 
 export interface CreateHabitInput {
   userId: string;
+  domain?: string;
   title: string;
   category?: string;
   targetDaysPerWeek?: number;
@@ -27,6 +28,7 @@ export interface CreateHabitInput {
 }
 
 export interface UpdateHabitInput {
+  domain?: string;
   title?: string;
   category?: string;
   scheduledDays?: number[];
@@ -320,6 +322,7 @@ export async function getHabitsAndAnalyticsForUser(
     return {
       id: habit.id,
       userId: habit.userId,
+      domain: habit.domain || 'DEVELOPER',
       title: habit.title,
       category: habit.category,
       targetDaysPerWeek: scheduledDays.length,
@@ -439,7 +442,8 @@ export async function getMonthlyCalendarForUser(
   monthStr?: string,
   todayStr?: string,
   timezoneOffsetMinutes?: number,
-  habitId?: string
+  habitId?: string,
+  domain?: string
 ): Promise<MonthlyCalendarResponse> {
   const tzOffset = parseTimezoneOffsetMinutes(timezoneOffsetMinutes, 0);
   const currentDay = todayStr || getTodayForTimezone(tzOffset);
@@ -461,6 +465,7 @@ export async function getMonthlyCalendarForUser(
     where: {
       userId,
       ...(habitId ? { id: habitId } : { isArchived: false }),
+      ...(domain && ['DEVELOPER', 'ATHLETE', 'LEARNING'].includes(domain) ? { domain } : {}),
     },
     include: {
       logs: {
@@ -648,6 +653,7 @@ export async function createHabit(input: CreateHabitInput) {
   return prisma.habit.create({
     data: {
       userId: input.userId,
+      domain: input.domain === 'ATHLETE' || input.domain === 'LEARNING' ? input.domain : 'DEVELOPER',
       title: cleanTitle,
       category: cleanCategory,
       targetDaysPerWeek,
@@ -672,6 +678,7 @@ export async function updateHabit(
   }
 
   const data: {
+    domain?: string;
     title?: string;
     category?: string;
     scheduledDays?: number[];
@@ -680,6 +687,13 @@ export async function updateHabit(
     leetcodeUsername?: string | null;
     isArchived?: boolean;
   } = {};
+
+  if (input.domain !== undefined) {
+    if (!['DEVELOPER', 'ATHLETE', 'LEARNING'].includes(input.domain)) {
+      throw new AppError('domain must be DEVELOPER, ATHLETE, or LEARNING.', 400);
+    }
+    data.domain = input.domain;
+  }
 
   if (input.title !== undefined) {
     const cleanTitle = typeof input.title === 'string' ? input.title.trim() : '';

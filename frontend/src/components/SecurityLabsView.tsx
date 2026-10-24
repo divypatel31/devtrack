@@ -10,6 +10,7 @@ import {
   Copy,
   CheckCircle2,
   Trash2,
+  Flame,
 } from 'lucide-react';
 import type { Habit } from '../types/habit';
 
@@ -25,33 +26,33 @@ const SECURITY_LAB_TEMPLATES = [
   {
     title: 'Complete 1 TryHackMe Room',
     tool: 'TryHackMe / OpenVPN',
-    difficulty: 'Medium',
-    desc: 'Connect via OpenVPN, enumerate target machine, and capture user/root flags.',
+    difficulty: 'Intermediate',
+    desc: 'Connect via OpenVPN, enumerate the target host, and document your findings.',
   },
   {
     title: 'Nmap Recon & Port Enumeration Lab',
     tool: 'Nmap',
-    difficulty: 'Easy',
-    desc: 'Run service & version detection (-sC -sV) and document open attack vectors.',
+    difficulty: 'Foundational',
+    desc: 'Run service and version detection (-sC -sV) and summarize open ports.',
   },
   {
-    title: 'Metasploit Exploitation Practice',
+    title: 'Metasploit Vulnerability Assessment',
     tool: 'Metasploit',
-    difficulty: 'Hard',
-    desc: 'Identify CVE matching service version, configure payload, and gain shell access.',
+    difficulty: 'Advanced',
+    desc: 'Verify service CVE exposure in a controlled lab environment and document remediation.',
   },
   {
-    title: 'Hydra Auth Brute-Force Audit',
+    title: 'Authentication Resilience Audit',
     tool: 'Hydra',
-    difficulty: 'Medium',
-    desc: 'Test SSH/HTTP login resilience against dictionary wordlists (rockyou.txt).',
+    difficulty: 'Intermediate',
+    desc: 'Evaluate login rate-limiting and password policy strength in a practice lab.',
   },
 ];
 
 const RECON_SNIPPETS = [
-  { label: 'Full SYN + Scripts Scan', cmd: 'nmap -sC -sV -T4 -p- <TARGET_IP>' },
-  { label: 'SSH Wordlist Audit (Hydra)', cmd: 'hydra -l admin -P rockyou.txt ssh://<TARGET_IP>' },
-  { label: 'OpenVPN Lab Tunnel', cmd: 'sudo openvpn --config divy_thm.ovpn' },
+  { label: 'Service & Version Scan', cmd: 'nmap -sC -sV -T4 -p- <TARGET_IP>' },
+  { label: 'Auth Resilience Check (Hydra)', cmd: 'hydra -l admin -P rockyou.txt ssh://<TARGET_IP>' },
+  { label: 'OpenVPN Lab Tunnel', cmd: 'sudo openvpn --config lab_session.ovpn' },
 ];
 
 export function SecurityLabsView({
@@ -66,7 +67,7 @@ export function SecurityLabsView({
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [creatingTitle, setCreatingTitle] = useState<string | null>(null);
 
-  const securityHabits = habits.filter((h) => h.category === 'Cybersecurity');
+  const securityHabits = habits.filter((h) => h.category === 'Cybersecurity' && !h.isArchived);
   const completedLabsToday = securityHabits.filter((h) => h.completedToday).length;
 
   function copyCommand(cmd: string) {
@@ -86,119 +87,119 @@ export function SecurityLabsView({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
       className="space-y-6"
     >
-      {/* Top Security Banner */}
-      <div className="bg-gradient-to-r from-[#151621] via-[#181b2c] to-[#151621] border border-emerald-500/25 rounded-[26px] p-6 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+      {/* Header Banner */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4 shadow-xs">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-            <Shield className="w-7 h-7" />
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
+            <Shield className="w-6 h-6" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-extrabold text-white">
-                Cybersecurity & Red-Team Labs
+              <h2 className="text-lg font-bold text-slate-900">
+                Cybersecurity Practice Labs
               </h2>
-              <span className="text-[10.5px] font-bold uppercase px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                CTF Proof Mode
+              <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Writeup & Flag Log
               </span>
             </div>
-            <p className="text-xs text-[#8b8d9f] mt-1">
-              Track daily TryHackMe rooms, Nmap reconnaissance, Metasploit labs, and log captured
-              flags or writeup notes.
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Track hands-on security labs, network reconnaissance practice, and study writeups.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-5 bg-[#0e0f15] px-5 py-3 rounded-2xl border border-white/[0.05]">
+        <div className="flex items-center gap-4 bg-slate-50 px-5 py-3 rounded-xl border border-slate-200/80 tabular-nums">
           <div>
-            <div className="text-2xl font-extrabold text-emerald-400">
+            <div className="text-2xl font-extrabold text-emerald-600">
               {completedLabsToday}/{securityHabits.length}
             </div>
-            <div className="text-[10.5px] text-[#7c7f93] uppercase font-bold">
-              Labs Pwned Today
-            </div>
+            <div className="text-[11px] text-slate-500 font-medium">Completed Today</div>
           </div>
         </div>
       </div>
 
-      {/* Active Security Lab Goals + Quick Recon Cheat Sheet */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* Left 8 Cols: Active Security Labs */}
-        <div className="xl:col-span-8 space-y-4">
+        <div className="xl:col-span-8 space-y-5">
           <div className="flex items-center justify-between px-1">
-            <h3 className="text-[16px] font-bold text-white">
-              Active Security Lab Goals ({securityHabits.length})
+            <h3 className="text-base font-bold text-slate-900">
+              Active Security Habits ({securityHabits.length})
             </h3>
-            <span className="text-xs text-[#7c7f93] flex items-center gap-1">
-              <Flag className="w-3.5 h-3.5 text-emerald-400" /> Flag / Writeup Proof Required
+            <span className="text-xs text-slate-500 flex items-center gap-1.5">
+              <Flag className="w-3.5 h-3.5 text-emerald-600" /> Summary note required on check-in
             </span>
           </div>
 
           {securityHabits.length === 0 ? (
-            <div className="bg-[#151621] border border-dashed border-white/10 rounded-[26px] p-8 text-center">
-              <Shield className="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80" />
-              <p className="text-sm font-bold text-white">No active Security Labs yet</p>
-              <p className="text-xs text-[#7c7f93] mt-1">
-                Click any of the 1-Click Offensive Security Lab Templates below to add it to your daily routine!
+            <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-8 text-center">
+              <Shield className="w-8 h-8 text-emerald-600 mx-auto mb-2 opacity-85" />
+              <p className="text-sm font-bold text-slate-900">No security lab habits yet</p>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                Choose one of the starter templates below to add regular security lab practice to
+                your schedule.
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {securityHabits.map((lab) => {
                 const isProofOpen = activeProofId === lab.id;
                 return (
                   <div
                     key={lab.id}
-                    className={`rounded-[24px] p-5 flex flex-col justify-between border transition ${
+                    className={`rounded-2xl p-5 flex flex-col justify-between border transition shadow-xs ${
                       lab.completedToday
-                        ? 'bg-gradient-to-br from-emerald-950/30 to-[#151621] border-emerald-500/40'
-                        : 'bg-[#151621] border-white/[0.06]'
+                        ? 'bg-emerald-50/40 border-emerald-200'
+                        : 'bg-white border-slate-200/90 hover:border-slate-300'
                     }`}
                   >
                     <div>
                       <div className="flex items-center justify-between mb-3">
-                        <span className="text-[10.5px] font-bold uppercase px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300">
-                          🛡️ Security Lab • 🔥 {lab.currentStreak}d
+                        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5 tabular-nums">
+                          <Shield className="w-3 h-3" /> Security {"\u2022"}{' '}
+                          <Flame className="w-3 h-3 text-amber-500" /> {lab.currentStreak}d
                         </span>
                         <button
                           type="button"
                           onClick={() => onDeleteLab(lab.id)}
-                          className="text-[#6c6f82] hover:text-rose-400 transition cursor-pointer"
-                          title="Delete lab goal"
+                          aria-label={`Delete ${lab.title}`}
+                          className="text-slate-400 hover:text-rose-600 transition cursor-pointer"
+                          title="Delete habit"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
 
-                      <h4 className="text-[15.5px] font-bold text-white mb-1">{lab.title}</h4>
-                      <p className="text-xs text-[#8b8d9f]">
+                      <h4 className="text-base font-bold text-slate-900 mb-1">{lab.title}</h4>
+                      <p className="text-xs text-slate-500">
                         {lab.todayNote ? (
-                          <span className="text-emerald-300 font-medium">
-                            🚩 Proof: "{lab.todayNote}"
+                          <span className="text-emerald-700 font-medium">
+                            Note: "{lab.todayNote}"
                           </span>
                         ) : (
-                          'Submit THM room name, CVE, or captured flag note to verify.'
+                          'Add a room name, lab topic, or takeaway note to complete today.'
                         )}
                       </p>
 
                       {isProofOpen && (
-                        <div className="mt-3 p-3 rounded-2xl bg-[#0e0f15] border border-emerald-500/40">
+                        <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
                           <input
                             type="text"
+                            aria-label="Lab completion note"
                             value={flagOrProof}
                             onChange={(e) => setFlagOrProof(e.target.value)}
-                            placeholder="e.g., Completed THM Pickle Rick / Flag{...}"
-                            className="w-full bg-transparent text-xs text-white focus:outline-none mb-2"
+                            placeholder="e.g., Completed Nmap enumeration room"
+                            className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 mb-2"
                             autoFocus
                           />
                           <div className="flex justify-end gap-2">
                             <button
                               type="button"
                               onClick={() => setActiveProofId(null)}
-                              className="text-[11px] text-[#7c7f93] hover:text-white px-2 py-1"
+                              className="text-xs text-slate-500 hover:text-slate-800 px-2.5 py-1"
                             >
                               Cancel
                             </button>
@@ -209,16 +210,16 @@ export function SecurityLabsView({
                                 setActiveProofId(null);
                                 setFlagOrProof('');
                               }}
-                              className="text-[11px] font-bold px-3 py-1 rounded-lg bg-emerald-500 text-slate-950 cursor-pointer"
+                              className="text-xs font-semibold px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
                             >
-                              Verify Flag / Lab
+                              Save Note
                             </button>
                           </div>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between mt-5 pt-3 border-t border-white/[0.05]">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-5 pt-3 border-t border-slate-100">
                       <div className="flex items-center gap-1">
                         {lab.weeklyProgress.map((d, i) => {
                           const isToday = i === lab.weeklyProgress.length - 1;
@@ -227,13 +228,19 @@ export function SecurityLabsView({
                               key={d.date}
                               className={`w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold ${
                                 d.completed
-                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
                                   : isToday
-                                  ? 'bg-white/10 text-white'
-                                  : 'bg-[#0e0f15] text-[#565869]'
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                  : 'bg-slate-100 text-slate-400'
                               }`}
                             >
-                              {d.completed ? '✓' : isToday ? '◎' : '🔒'}
+                              {d.completed ? (
+                                <Check className="w-3 h-3 stroke-[2.5]" />
+                              ) : isToday ? (
+                                'o'
+                              ) : (
+                                '-'
+                              )}
                             </span>
                           );
                         })}
@@ -249,21 +256,21 @@ export function SecurityLabsView({
                             setFlagOrProof('');
                           }
                         }}
-                        className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                        className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition ${
                           lab.completedToday
-                            ? 'bg-emerald-500 text-slate-950'
-                            : 'bg-[#6c47ff] hover:bg-[#5936e8] text-white'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-700 text-white'
                         }`}
                       >
                         {lab.completedToday ? (
                           <>
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Pwned</span>
+                            <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                            <span>Completed</span>
                           </>
                         ) : (
                           <>
                             <Flag className="w-3.5 h-3.5" />
-                            <span>Log Flag</span>
+                            <span>Log Lab</span>
                           </>
                         )}
                       </button>
@@ -274,36 +281,35 @@ export function SecurityLabsView({
             </div>
           )}
 
-          {/* 1-Click Security Lab Templates */}
-          <div className="pt-3">
-            <h3 className="text-sm font-bold text-white mb-3">
-              1-Click Offensive Security Lab Presets
+          <div className="pt-2">
+            <h3 className="text-sm font-bold text-slate-900 mb-3">
+              Starter Security Lab Templates
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {SECURITY_LAB_TEMPLATES.map((tpl) => (
                 <div
                   key={tpl.title}
-                  className="bg-[#151621] border border-white/[0.05] hover:border-emerald-500/30 rounded-2xl p-4 flex flex-col justify-between gap-3 transition"
+                  className="bg-white border border-slate-200/90 hover:border-slate-300 rounded-2xl p-4 flex flex-col justify-between gap-3 transition shadow-xs"
                 >
                   <div>
-                    <div className="flex items-center justify-between text-[11px] mb-1">
-                      <span className="font-bold text-emerald-400">{tpl.tool}</span>
-                      <span className="px-2 py-0.5 rounded bg-white/5 text-[#9ca0b5]">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="font-semibold text-emerald-700">{tpl.tool}</span>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium">
                         {tpl.difficulty}
                       </span>
                     </div>
-                    <h4 className="text-sm font-bold text-white">{tpl.title}</h4>
-                    <p className="text-xs text-[#7c7f93] mt-1">{tpl.desc}</p>
+                    <h4 className="text-sm font-bold text-slate-900">{tpl.title}</h4>
+                    <p className="text-xs text-slate-500 mt-1">{tpl.desc}</p>
                   </div>
                   <button
                     type="button"
                     disabled={creatingTitle === tpl.title}
                     onClick={() => handleDeployTemplate(tpl.title)}
-                    className="w-full py-2 rounded-xl bg-[#1e2030] hover:bg-emerald-500 hover:text-slate-950 text-xs font-bold text-white transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-2 rounded-xl bg-slate-100 hover:bg-indigo-600 hover:text-white text-xs font-semibold text-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>
-                      {creatingTitle === tpl.title ? 'Deploying Lab...' : 'Add Lab to Routine'}
+                      {creatingTitle === tpl.title ? 'Adding...' : 'Add to Habits'}
                     </span>
                   </button>
                 </div>
@@ -312,44 +318,44 @@ export function SecurityLabsView({
           </div>
         </div>
 
-        {/* Right 4 Cols: Red-Team CLI Quick Reference */}
         <div className="xl:col-span-4 space-y-5">
-          <div className="bg-[#151621] border border-white/[0.05] rounded-[26px] p-6">
-            <div className="flex items-center gap-2.5 mb-4">
-              <Terminal className="w-5 h-5 text-emerald-400" />
-              <h3 className="text-[15.5px] font-bold text-white">Recon CLI Quick Reference</h3>
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 sm:p-6 shadow-xs">
+            <div className="flex items-center gap-2.5 mb-2">
+              <Terminal className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-base font-bold text-slate-900">Quick Reference Commands</h3>
             </div>
-            <p className="text-xs text-[#7c7f93] mb-4">
-              Click any snippet to copy for your TryHackMe / HackTheBox terminal session:
+            <p className="text-xs text-slate-500 mb-4">
+              Click any snippet to copy it to your clipboard for lab sessions:
             </p>
 
             <div className="space-y-3">
               {RECON_SNIPPETS.map((item) => (
-                <div
+                <button
                   key={item.label}
+                  type="button"
                   onClick={() => copyCommand(item.cmd)}
-                  className="p-3 rounded-2xl bg-[#0e0f15] border border-white/[0.05] hover:border-emerald-500/40 cursor-pointer transition group"
+                  className="w-full text-left p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 hover:border-indigo-300 cursor-pointer transition group"
                 >
-                  <div className="flex items-center justify-between text-[11px] text-[#8b8d9f] mb-1">
-                    <span>{item.label}</span>
+                  <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+                    <span className="font-medium">{item.label}</span>
                     {copiedCmd === item.cmd ? (
-                      <span className="text-emerald-400 flex items-center gap-1 font-bold">
-                        <CheckCircle2 className="w-3 h-3" /> Copied
+                      <span className="text-emerald-600 flex items-center gap-1 font-semibold">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Copied
                       </span>
                     ) : (
-                      <Copy className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                      <Copy className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-700" />
                     )}
                   </div>
-                  <code className="text-xs text-emerald-300 font-mono break-all">{item.cmd}</code>
-                </div>
+                  <code className="text-xs text-indigo-700 font-mono break-all">{item.cmd}</code>
+                </button>
               ))}
             </div>
 
-            <div className="mt-6 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200 flex items-start gap-2.5">
-              <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="mt-6 p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
+              <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <span>
-                <strong>Anti-Cheat Policy:</strong> Security labs require logging the room name,
-                CVE identifier, or captured flag hash before today's streak increments.
+                <strong>Verification Note:</strong> Record the lab name or a short takeaway note
+                when checking in so your learning log stays meaningful.
               </span>
             </div>
           </div>
